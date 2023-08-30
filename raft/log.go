@@ -70,15 +70,12 @@ func newLog(storage Storage) *RaftLog {
 	if err != nil {
 		panic(err)
 	}
-	hardState, _, _ := storage.InitialState()
 	return &RaftLog{
-		storage:         storage,
-		committed:       firstIndex - 1,
-		applied:         firstIndex - 1,
-		stabled:         hardState.Commit,
-		entries:         entries,
-		pendingSnapshot: nil,
-		lastAppend:      firstIndex - 1,
+		storage:    storage,
+		applied:    firstIndex - 1,
+		stabled:    lastIndex,
+		entries:    entries,
+		lastAppend: firstIndex,
 	}
 }
 
@@ -100,24 +97,61 @@ func (l *RaftLog) allEntries() []pb.Entry {
 // unstableEntries return all the unstable entries
 func (l *RaftLog) unstableEntries() []pb.Entry {
 	// Your Code Here (2A).
-	return l.entries[l.stabled:]
+	if len(l.entries) > 0 {
+		return l.entries[l.stabled-l.lastAppend+1:]
+	}
+	return nil
 }
 
 // nextEnts returns all the committed but not applied entries
 func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 	// Your Code Here (2A).
-	return l.entries[l.applied:l.committed]
+	if len(l.entries) > 0 {
+		return l.entries[l.applied-l.lastAppend+1 : l.committed-l.lastAppend+1]
+	}
+	return nil
 }
 
 // LastIndex return the last index of the log entries
 func (l *RaftLog) LastIndex() uint64 {
 	// Your Code Here (2A).
-	lastIndex, _ := l.storage.LastIndex()
-	return lastIndex
+	var index uint64
+	//if !IsEmptySnap(l.pendingSnapshot) {
+	//	index = l.pendingSnapshot.Metadata.Index
+	//}
+	if len(l.entries) > 0 {
+		return max(l.entries[len(l.entries)-1].Index, index)
+	}
+	i, _ := l.storage.LastIndex()
+	return max(i, index)
 }
 
 // Term return the term of the entry in the given index
 func (l *RaftLog) Term(i uint64) (uint64, error) {
 	// Your Code Here (2A).
-	return l.entries[i].Term, nil
+	if len(l.entries) > 0 && i >= l.lastAppend {
+		return l.entries[i-l.lastAppend].Term, nil
+	}
+	//term, err := l.storage.Term(i)
+	//if err == ErrUnavailable && !IsEmptySnap(l.pendingSnapshot) {
+	//	if i == l.pendingSnapshot.Metadata.Index {
+	//		term = l.pendingSnapshot.Metadata.Term
+	//		err = nil
+	//	} else if i < l.pendingSnapshot.Metadata.Index {
+	//		err = ErrCompacted
+	//	}
+	//}
+	return 0, nil
+}
+
+func (l *RaftLog) getEntryIndex(i uint64) int {
+	idx := int(i - l.lastAppend)
+	if idx < 0 {
+		panic("getEntryIndex error")
+	}
+	return idx
+}
+
+func (l *RaftLog) toEntryIndex(i int) uint64 {
+	return uint64(i) + l.lastAppend
 }
