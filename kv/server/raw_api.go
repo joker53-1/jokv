@@ -86,6 +86,7 @@ func (server *Server) RawScan(_ context.Context, req *kvrpcpb.RawScanRequest) (*
 				Key:   i.Key(),
 				Value: value,
 			})
+			count += 1
 		} else {
 			break
 		}
