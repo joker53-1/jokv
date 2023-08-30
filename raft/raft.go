@@ -165,7 +165,20 @@ func newRaft(c *Config) *Raft {
 		panic(err.Error())
 	}
 	// Your Code Here (2A).
-	return nil
+	hardState, _, _ := c.Storage.InitialState()
+	raftLog := newLog(c.Storage)
+	prs := map[uint64]*Progress{}
+	for _, peer := range c.peers {
+		prs[peer] = &Progress{}
+	}
+	return &Raft{
+		id:               c.ID,
+		Term:             hardState.Term,
+		RaftLog:          raftLog,
+		electionTimeout:  c.ElectionTick,
+		heartbeatTimeout: c.HeartbeatTick,
+		Prs:              prs,
+	}
 }
 
 // sendAppend sends an append RPC with new entries (if any) and the
@@ -207,8 +220,93 @@ func (r *Raft) Step(m pb.Message) error {
 	// Your Code Here (2A).
 	switch r.State {
 	case StateFollower:
+		return r.followerStep(m)
 	case StateCandidate:
+		return r.candidateStep(m)
 	case StateLeader:
+		return r.leaderStep(m)
+	}
+	return nil
+}
+
+func (r *Raft) followerStep(m pb.Message) error {
+	switch m.MsgType {
+	case pb.MessageType_MsgHup:
+		if _, ok := r.Prs[r.id]; !ok {
+			return nil
+		}
+		if len(r.Prs) == 1 {
+			r.State = StateLeader
+			r.Lead = r.id
+			return nil
+		}
+		r.State = StateCandidate
+		r.Term += 1
+		r.Vote = r.id
+		r.votes[r.id] = true
+		r.electionElapsed = 0
+		for id, _ := range r.Prs {
+			if id == r.id {
+				continue
+			}
+			lastIndex := r.RaftLog.LastIndex()
+			logTerm, _ := r.RaftLog.Term(lastIndex)
+			r.msgs = append(r.msgs, pb.Message{
+				MsgType: pb.MessageType_MsgRequestVote,
+				To:      id,
+				From:    r.id,
+				Term:    r.Term,
+				LogTerm: logTerm,
+				Index:   lastIndex,
+			})
+		}
+		return nil
+	case pb.MessageType_MsgPropose:
+		return ErrProposalDropped
+	}
+	return nil
+}
+
+func (r *Raft) candidateStep(m pb.Message) error {
+	switch m.MsgType {
+	case pb.MessageType_MsgPropose:
+		return ErrProposalDropped
+
+	}
+	return nil
+}
+
+func (r *Raft) leaderStep(m pb.Message) error {
+	switch m.MsgType {
+	case pb.MessageType_MsgBeat:
+		r.msgs = append(r.msgs, pb.Message{
+			MsgType: pb.MessageType_MsgHeartbeat,
+		})
+		return nil
+	case pb.MessageType_MsgPropose:
+		if r.leadTransferee != None {
+			return ErrProposalDropped
+		}
+		for _, entry := range m.Entries {
+			r.RaftLog.entries = append(r.RaftLog.entries, *entry)
+		}
+		if len(r.Prs) == 1 {
+			r.RaftLog.committed = r.RaftLog.LastIndex()
+		}
+		for id, _ := range r.Prs {
+			lastIndex := r.RaftLog.LastIndex()
+			logTerm, _ := r.RaftLog.Term(lastIndex)
+			r.msgs = append(r.msgs, pb.Message{
+				MsgType: pb.MessageType_MsgAppend,
+				To:      id,
+				From:    r.id,
+				Term:    r.Term,
+				LogTerm: logTerm,
+				Index:   lastIndex,
+				Entries: m.Entries,
+				Commit:  r.RaftLog.committed,
+			})
+		}
 	}
 	return nil
 }
